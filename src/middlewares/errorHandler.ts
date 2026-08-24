@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
+import { ZodError } from 'zod';
 
 export class AppError extends Error {
   public statusCode: number;
@@ -11,12 +12,38 @@ export class AppError extends Error {
 }
 
 export const errorHandler = (
-  err: Error | AppError,
+  err: any,
   req: Request,
   res: Response,
   next: NextFunction
-) => {
-  const statusCode = err instanceof AppError ? err.statusCode : 500;
+): void => {
+  // Handle Zod validation errors
+  if (err instanceof ZodError) {
+    const formattedErrors = err.issues.map((e) => ({
+      field: e.path.join('.'),
+      message: e.message,
+    }));
+
+    res.status(400).json({
+      success: false,
+      status: 400,
+      message: 'Validation failed',
+      errors: formattedErrors,
+    });
+    return;
+  }
+
+  // Handle Prisma unique constraint violation (P2002)
+  if (err.code === 'P2002') {
+    res.status(409).json({
+      success: false,
+      status: 409,
+      message: 'A record with this information already exists',
+    });
+    return;
+  }
+
+  const statusCode = err instanceof AppError ? err.statusCode : err.status || 500;
   const message = err.message || 'Internal Server Error';
 
   res.status(statusCode).json({

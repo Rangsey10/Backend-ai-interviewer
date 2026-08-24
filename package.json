@@ -1,12 +1,14 @@
 {
   "name": "interviewai-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "AI Interviewer Real-Time Engine & Sandboxed Runner",
   "main": "dist/server.js",
   "scripts": {
     "dev": "nodemon --watch src --exec ts-node src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "test:socket": "ts-node test_socket_session.ts",
+    "test:runner": "ts-node test_code_runner.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -14,6 +16,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@prisma/client": "^7.9.1",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -21,6 +24,7 @@
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
     "winston": "^3.19.0",
     "zod": "^4.4.3"
   },
@@ -32,6 +36,6 @@
     "@types/node": "^26.2.0",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
-    "typescript": "^7.0.2"
+    "typescript": "^5.8.2"
   }
 }

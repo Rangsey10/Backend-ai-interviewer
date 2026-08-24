@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CANDIDATE
+  RECRUITER
+  ADMIN
+}
+
+enum SessionStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  fullName     String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(CANDIDATE)
+  resumeUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  candidateSessions InterviewSession[] @relation("CandidateSessions")
+  recruiterSessions InterviewSession[] @relation("RecruiterSessions")
+
+  @@map("users")
+}
+
+model InterviewSession {
+  id                   String        @id @default(uuid())
+  candidateId          String
+  recruiterId          String?
+  jobTitle             String
+  jobDescription       String?
+  resumeText           String?
+  status               SessionStatus @default(SCHEDULED)
+  codeState            String?       @default("// Welcome to the Live Interview Session\n// Write your code here\n")
+  currentQuestionIndex Int           @default(0)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  candidate User  @relation("CandidateSessions", fields: [candidateId], references: [id], onDelete: Cascade)
+  recruiter User? @relation("RecruiterSessions", fields: [recruiterId], references: [id], onDelete: SetNull)
+
+  questions Question[]
+  results   Result[]
+
+  @@map("interview_sessions")
+}
+
+model Question {
+  id        String  @id @default(uuid())
+  sessionId String
+  text      String
+  type      String? // e.g. "technical", "behavioral", "coding"
+  order     Int
+
+  session InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  answer  Answer?
+
+  @@map("questions")
+}
+
+model Answer {
+  id            String  @id @default(uuid())
+  questionId    String  @unique
+  answerText    String?
+  submittedCode String?
+  language      String?
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("answers")
+}
+
+model Result {
+  id        String   @id @default(uuid())
+  sessionId String
+  score     Float
+  feedback  String
+  createdAt DateTime @default(now())
+
+  session InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("results")
+}
