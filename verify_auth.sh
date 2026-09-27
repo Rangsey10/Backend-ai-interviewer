@@ -4,11 +4,12 @@
 # verify_auth.sh - Automated Verification Test Script for Auth & RBAC
 # Tests:
 #   1. Candidate Registration (CANDIDATE role)
-#   2. Admin Registration (ADMIN role)
-#   3. Candidate & Admin Login (JWT token extraction)
+#   2. Admin self-registration is REJECTED (Expect 400)
+#   3. Candidate Login (JWT token extraction)
 #   4. GET /api/test/me with valid token (Expect 200 OK)
 #   5. GET /api/test/admin-only as Candidate (Expect 403 Forbidden)
-#   6. GET /api/test/admin-only as Admin (Expect 200 OK)
+#   6. GET /api/test/admin-only as Admin (Expect 200 OK) — only if ADMIN_TOKEN is set
+#      (create one with `npm run create-admin`, log in, then export ADMIN_TOKEN)
 #   7. GET /api/test/me with no token (Expect 401 Unauthorized)
 # ==============================================================================
 
@@ -42,6 +43,9 @@ extract_json_field() {
   local field="$2"
   if command -v jq >/dev/null 2>&1; then
     echo "$json" | jq -r ".${field} // .data.${field} // empty"
+  elif command -v node >/dev/null 2>&1; then
+    # Node is always available for this project (Windows' python3 is often a Store stub)
+    echo "$json" | node -e "let s='';process.stdin.on('data',c=>s+=c).on('end',()=>{try{const d=JSON.parse(s);console.log(d['$field']??d.data?.['$field']??'')}catch{console.log('')}})"
   elif command -v python3 >/dev/null 2>&1; then
     echo "$json" | python3 -c "import sys, json; data=json.load(sys.stdin); print(data.get('$field') or (data.get('data', {}) if isinstance(data.get('data'), dict) else {}).get('$field') or '')"
   elif command -v python >/dev/null 2>&1; then
@@ -88,7 +92,7 @@ assert_status "Register Candidate" 201 "$CANDIDATE_REG_CODE" "$CANDIDATE_REG_BOD
 # ------------------------------------------------------------------------------
 # Test 2: Register Admin
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}Step 2: Registering Admin User (ADMIN)...${NC}"
+echo -e "\n${YELLOW}Step 2: Attempting Admin Self-Registration (Expect 400)...${NC}"
 ADMIN_REG_RES=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/api/auth/register" \
   -H "Content-Type: application/json" \
   -d "{
@@ -100,7 +104,7 @@ ADMIN_REG_RES=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/api/auth/regist
 
 ADMIN_REG_BODY=$(echo "$ADMIN_REG_RES" | sed '$d')
 ADMIN_REG_CODE=$(echo "$ADMIN_REG_RES" | tail -n 1)
-assert_status "Register Admin" 201 "$ADMIN_REG_CODE" "$ADMIN_REG_BODY"
+assert_status "Reject Admin Self-Registration" 400 "$ADMIN_REG_CODE" "$ADMIN_REG_BODY"
 
 # ------------------------------------------------------------------------------
 # Test 3: Login Candidate & Extract Token
@@ -122,25 +126,8 @@ if [ -z "$CANDIDATE_TOKEN" ]; then
   echo -e "  [${RED}ERROR${NC}] Could not extract candidate JWT token."
 fi
 
-# ------------------------------------------------------------------------------
-# Test 4: Login Admin & Extract Token
-# ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}Step 4: Logging in Admin...${NC}"
-ADMIN_LOGIN_RES=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/api/auth/login" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"email\": \"${ADMIN_EMAIL}\",
-    \"password\": \"${PASSWORD}\"
-  }")
-
-ADMIN_LOGIN_BODY=$(echo "$ADMIN_LOGIN_RES" | sed '$d')
-ADMIN_LOGIN_CODE=$(echo "$ADMIN_LOGIN_RES" | tail -n 1)
-assert_status "Login Admin" 200 "$ADMIN_LOGIN_CODE" "$ADMIN_LOGIN_BODY"
-
-ADMIN_TOKEN=$(extract_json_field "$ADMIN_LOGIN_BODY" "token")
-if [ -z "$ADMIN_TOKEN" ]; then
-  echo -e "  [${RED}ERROR${NC}] Could not extract admin JWT token."
-fi
+# Admins can't self-register; pass a real admin's token to test admin access
+ADMIN_TOKEN="${ADMIN_TOKEN:-}"
 
 # ------------------------------------------------------------------------------
 # Test 5: GET /api/test/me with Candidate Token (Expect 200)
@@ -167,13 +154,17 @@ assert_status "Reject /api/test/admin-only for Candidate (RBAC)" 403 "$CANDIDATE
 # ------------------------------------------------------------------------------
 # Test 7: GET /api/test/admin-only with Admin Token (Expect 200 OK)
 # ------------------------------------------------------------------------------
-echo -e "\n${YELLOW}Step 7: Testing GET /api/test/admin-only with Admin Token (Expect 200 OK)...${NC}"
-ADMIN_ACCESS_RES=$(curl -s -w "\n%{http_code}" -X GET "${BASE_URL}/api/test/admin-only" \
-  -H "Authorization: Bearer ${ADMIN_TOKEN}")
+if [ -n "$ADMIN_TOKEN" ]; then
+  echo -e "\n${YELLOW}Step 7: Testing GET /api/test/admin-only with Admin Token (Expect 200 OK)...${NC}"
+  ADMIN_ACCESS_RES=$(curl -s -w "\n%{http_code}" -X GET "${BASE_URL}/api/test/admin-only" \
+    -H "Authorization: Bearer ${ADMIN_TOKEN}")
 
-ADMIN_ACCESS_BODY=$(echo "$ADMIN_ACCESS_RES" | sed '$d')
-ADMIN_ACCESS_CODE=$(echo "$ADMIN_ACCESS_RES" | tail -n 1)
-assert_status "Grant /api/test/admin-only for Admin (RBAC)" 200 "$ADMIN_ACCESS_CODE" "$ADMIN_ACCESS_BODY"
+  ADMIN_ACCESS_BODY=$(echo "$ADMIN_ACCESS_RES" | sed '$d')
+  ADMIN_ACCESS_CODE=$(echo "$ADMIN_ACCESS_RES" | tail -n 1)
+  assert_status "Grant /api/test/admin-only for Admin (RBAC)" 200 "$ADMIN_ACCESS_CODE" "$ADMIN_ACCESS_BODY"
+else
+  echo -e "\n${YELLOW}Step 7: Skipped (set ADMIN_TOKEN to test admin access)${NC}"
+fi
 
 # ------------------------------------------------------------------------------
 # Test 8: GET /api/test/me without Token (Expect 401 Unauthorized)

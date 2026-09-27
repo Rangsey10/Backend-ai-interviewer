@@ -30,12 +30,13 @@ function assert(condition: boolean, testName: string, detail?: string) {
 
 async function fetchJson(endpoint: string, options: any = {}) {
   const url = `${BASE_URL}${endpoint}`;
+  // Spread options first so the merged headers (incl. Content-Type) are not overwritten
   const res = await fetch(url, {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...options.headers,
+      ...(options.headers || {}),
     },
-    ...options,
   });
 
   const body = await res.json().catch(() => ({}));
@@ -202,6 +203,40 @@ try {
     );
 
     // -------------------------------------------------------------------------
+    // Test 5b: TypeScript, output cap, unsupported language
+    // -------------------------------------------------------------------------
+    console.log(`\n${YELLOW}Test 5b: TypeScript / Output Limit / Unsupported Language...${RESET}`);
+    const tsResult = await codeRunnerService.executeCode({
+      language: 'typescript',
+      code: `const add = (a: number, b: number): number => a + b;\nconsole.log("TS_OK", add(2, 3));`,
+      timeoutMs: 4000,
+    });
+    assert(
+      tsResult.status === 'SUCCESS' && tsResult.stdout.includes('TS_OK 5'),
+      'Execute TypeScript Code (type annotations)',
+      `Status: ${tsResult.status}, Stdout: "${tsResult.stdout}", Stderr: "${tsResult.stderr.slice(0, 120)}"`
+    );
+
+    const floodResult = await codeRunnerService.executeCode({
+      language: 'javascript',
+      code: `while (true) { console.log("x".repeat(1000)); }`,
+      timeoutMs: 5000,
+    });
+    assert(
+      floodResult.status === 'RUNTIME_ERROR' && floodResult.stderr.includes('Output limit') && floodResult.stdout.length <= 64 * 1024,
+      'Stop Execution When Output Limit Exceeded',
+      `Status: ${floodResult.status}, stdout length: ${floodResult.stdout.length}`
+    );
+
+    let unsupportedRejected = false;
+    try {
+      await codeRunnerService.executeCode({ language: 'cobol', code: 'DISPLAY "HI".' });
+    } catch (err: any) {
+      unsupportedRejected = err?.statusCode === 400;
+    }
+    assert(unsupportedRejected, 'Reject Unsupported Language with 400');
+
+    // -------------------------------------------------------------------------
     // Test 6: REST API Endpoint (POST /api/sessions/:id/execute-code)
     // -------------------------------------------------------------------------
     console.log(`\n${YELLOW}Test 6: REST API Endpoint POST /api/sessions/:id/execute-code...${RESET}`);
@@ -225,6 +260,16 @@ try {
     });
 
     const sessionId = createSessionRes.body?.session?.id || createSessionRes.body?.data?.id;
+    assert(!!token && !!sessionId, 'Register User & Create Session for REST/Socket tests');
+
+    if (sessionId && token) {
+      const tooLongTimeout = await fetchJson(`/api/sessions/${sessionId}/execute-code`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ language: 'javascript', code: 'console.log(1)', timeoutMs: 600000 }),
+      });
+      assert(tooLongTimeout.status === 400, 'Reject timeoutMs above 30s via REST', `HTTP ${tooLongTimeout.status}`);
+    }
 
     if (sessionId && token) {
       const restExecRes = await fetchJson(`/api/sessions/${sessionId}/execute-code`, {
@@ -264,8 +309,20 @@ try {
         setTimeout(() => resolve(), 2000);
       });
 
+      assert(socket.connected, 'Socket Connected for code:run test');
+
       if (socket.connected) {
-        socket.emit('room:join', { sessionId });
+        const hugeTimeout = await new Promise<any>((resolve) => {
+          socket.emit('room:join', { sessionId }, () => {
+            socket.emit(
+              'code:run',
+              { sessionId, language: 'javascript', code: 'console.log(1)', timeoutMs: 600000 },
+              (res: any) => resolve(res)
+            );
+          });
+        });
+        assert(hugeTimeout?.success === false, 'Reject timeoutMs above 30s via Socket code:run', JSON.stringify(hugeTimeout));
+
 
         const wsExecPromise = new Promise<void>((resolve, reject) => {
           const timeout = setTimeout(() => reject(new Error('Timed out waiting for code:executed event')), 6000);

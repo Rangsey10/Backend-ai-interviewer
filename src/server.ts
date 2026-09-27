@@ -1,7 +1,7 @@
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import app from './app';
-import { env } from './config/env';
+import { env, corsOrigin } from './config/env';
 import { initInterviewSocket } from './sockets/interview.socket';
 
 const server = http.createServer(app);
@@ -9,9 +9,8 @@ const server = http.createServer(app);
 // Initialize Socket.IO with CORS settings
 const io = new SocketIOServer(server, {
   cors: {
-    origin: env.CORS_ORIGIN,
+    origin: corsOrigin,
     methods: ['GET', 'POST', 'PATCH'],
-    credentials: true,
   },
 });
 

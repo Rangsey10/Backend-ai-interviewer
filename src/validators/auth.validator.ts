@@ -14,10 +14,13 @@ export const registerSchema = z.object({
     .trim(),
   password: z
     .string()
-    .min(6, 'Password must be at least 6 characters')
+    .min(8, 'Password must be at least 8 characters')
     .max(100, 'Password cannot exceed 100 characters'),
+  // ADMIN cannot be self-assigned; create admins with `npm run create-admin`
   role: z
-    .enum([UserRole.CANDIDATE, UserRole.RECRUITER, UserRole.ADMIN])
+    .enum([UserRole.CANDIDATE, UserRole.RECRUITER], {
+      error: 'role must be CANDIDATE or RECRUITER',
+    })
     .default(UserRole.CANDIDATE),
   resumeUrl: z.string().url('Invalid URL format for resume').optional().nullable(),
 });

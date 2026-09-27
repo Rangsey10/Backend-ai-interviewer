@@ -9,9 +9,46 @@ import { AppError } from '../middlewares/errorHandler';
 
 const BCRYPT_SALT_ROUNDS = 10;
 
-// In-memory fallback user store for test environments and offline DB resilience
-const inMemoryUsers = new Map<string, any>();
+interface UserRecord {
+  id: string;
+  fullName: string;
+  email: string;
+  passwordHash: string;
+  role: string;
+  resumeUrl: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// In-memory user store, used ONLY when no DATABASE_URL is configured (dev/test)
+const inMemoryUsers = new Map<string, UserRecord>();
 const emailToUserId = new Map<string, string>();
+
+async function findUserByEmail(email: string): Promise<UserRecord | null> {
+  if (prisma) {
+    return prisma.user.findUnique({ where: { email } });
+  }
+  const id = emailToUserId.get(email);
+  return id ? inMemoryUsers.get(id) ?? null : null;
+}
+
+async function findUserById(id: string): Promise<UserRecord | null> {
+  if (prisma) {
+    return prisma.user.findUnique({ where: { id } });
+  }
+  return inMemoryUsers.get(id) ?? null;
+}
+
+async function insertUser(data: Omit<UserRecord, 'id' | 'createdAt' | 'updatedAt'>): Promise<UserRecord> {
+  if (prisma) {
+    return prisma.user.create({ data: { ...data, role: data.role as UserRole } });
+  }
+  const now = new Date();
+  const record: UserRecord = { id: randomUUID(), ...data, createdAt: now, updatedAt: now };
+  inMemoryUsers.set(record.id, record);
+  emailToUserId.set(record.email, record.id);
+  return record;
+}
 
 /**
  * Strips sensitive data (passwordHash) from user object
@@ -52,78 +89,27 @@ export function generateToken(payload: { userId: string; email: string; role: Us
 }
 
 /**
- * Register a new user with hashed password and role
+ * Register a new user with hashed password and role.
+ * Public registration is limited to CANDIDATE / RECRUITER by the validator.
  */
 export async function register(input: RegisterInput): Promise<AuthResponse> {
   const normalizedEmail = input.email.toLowerCase().trim();
 
-  // Check in-memory first
-  if (emailToUserId.has(normalizedEmail)) {
+  if (await findUserByEmail(normalizedEmail)) {
     throw new AppError('Email address is already registered', 409);
   }
 
-  // Check database if available
-  try {
-    if (prisma?.user?.findUnique) {
-      const existingUser = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
-      });
-      if (existingUser) {
-        throw new AppError('Email address is already registered', 409);
-      }
-    }
-  } catch (err: any) {
-    if (err instanceof AppError) throw err;
-  }
-
-  // Hash password using bcrypt
   const passwordHash = await bcrypt.hash(input.password, BCRYPT_SALT_ROUNDS);
-  const role = (input.role as UserRole) || UserRole.CANDIDATE;
-  const userId = randomUUID();
-  const now = new Date();
-
-  const userRecord = {
-    id: userId,
+  const user = await insertUser({
     fullName: input.fullName.trim(),
     email: normalizedEmail,
     passwordHash,
-    role,
+    role: input.role,
     resumeUrl: input.resumeUrl || null,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  inMemoryUsers.set(userId, userRecord);
-  emailToUserId.set(normalizedEmail, userId);
-
-  // Persist to DB if available
-  try {
-    if (prisma?.user?.create) {
-      const dbUser = await prisma.user.create({
-        data: {
-          id: userId,
-          fullName: userRecord.fullName,
-          email: userRecord.email,
-          passwordHash: userRecord.passwordHash,
-          role: userRecord.role as any,
-          resumeUrl: userRecord.resumeUrl,
-        },
-      });
-      if (dbUser) {
-        inMemoryUsers.set(dbUser.id, dbUser);
-        emailToUserId.set(dbUser.email, dbUser.id);
-      }
-    }
-  } catch {
-    // Falls back to in-memory store
-  }
-
-  const sanitized = sanitizeUser(userRecord);
-  const token = generateToken({
-    userId: userRecord.id,
-    email: userRecord.email,
-    role: sanitized.role,
   });
+
+  const sanitized = sanitizeUser(user);
+  const token = generateToken({ userId: user.id, email: user.email, role: sanitized.role });
 
   return { user: sanitized, token };
 }
@@ -133,23 +119,7 @@ export async function register(input: RegisterInput): Promise<AuthResponse> {
  */
 export async function login(input: LoginInput): Promise<AuthResponse> {
   const normalizedEmail = input.email.toLowerCase().trim();
-
-  let user: any = null;
-
-  try {
-    if (prisma?.user?.findUnique) {
-      user = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
-      });
-    }
-  } catch {}
-
-  if (!user) {
-    const memoryId = emailToUserId.get(normalizedEmail);
-    if (memoryId) {
-      user = inMemoryUsers.get(memoryId);
-    }
-  }
+  const user = await findUserByEmail(normalizedEmail);
 
   if (!user) {
     throw new AppError('Invalid email or password', 401);
@@ -161,11 +131,7 @@ export async function login(input: LoginInput): Promise<AuthResponse> {
   }
 
   const sanitized = sanitizeUser(user);
-  const token = generateToken({
-    userId: user.id,
-    email: user.email,
-    role: sanitized.role,
-  });
+  const token = generateToken({ userId: user.id, email: user.email, role: sanitized.role });
 
   return { user: sanitized, token };
 }
@@ -174,19 +140,7 @@ export async function login(input: LoginInput): Promise<AuthResponse> {
  * Retrieve user profile by user ID
  */
 export async function getUserProfile(userId: string): Promise<SanitizedUser> {
-  let user: any = null;
-
-  try {
-    if (prisma?.user?.findUnique) {
-      user = await prisma.user.findUnique({
-        where: { id: userId },
-      });
-    }
-  } catch {}
-
-  if (!user) {
-    user = inMemoryUsers.get(userId);
-  }
+  const user = await findUserById(userId);
 
   if (!user) {
     throw new AppError('User profile not found', 404);

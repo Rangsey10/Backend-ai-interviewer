@@ -8,7 +8,8 @@ export const executeCodeSchema = z.object({
     .trim(),
   code: z
     .string()
-    .min(1, 'code cannot be empty'),
+    .min(1, 'code cannot be empty')
+    .max(100_000, 'code cannot exceed 100,000 characters'),
   timeoutMs: z
     .number()
     .int()

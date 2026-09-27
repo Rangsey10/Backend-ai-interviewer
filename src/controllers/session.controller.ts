@@ -4,6 +4,23 @@ import { executeCodeSchema } from '../validators/codeRunner.validator';
 import * as sessionService from '../services/session.service';
 import * as codeRunnerService from '../services/codeRunner.service';
 import { AppError } from '../middlewares/errorHandler';
+import { JwtUserPayload } from '../types/auth.types';
+
+function requireUser(req: Request): JwtUserPayload {
+  const user = req.user;
+  if (!user) {
+    throw new AppError('Authentication required', 401);
+  }
+  return user;
+}
+
+function requireSessionId(req: Request): string {
+  const id = String(req.params.id || '');
+  if (!id) {
+    throw new AppError('Session ID is required', 400);
+  }
+  return id;
+}
 
 /**
  * POST /api/sessions/create
@@ -11,11 +28,7 @@ import { AppError } from '../middlewares/errorHandler';
  */
 export async function create(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const user = (req as any).user;
-    if (!user) {
-      throw new AppError('Authentication required to create an interview session', 401);
-    }
-
+    const user = requireUser(req);
     const validatedData = createSessionSchema.parse(req.body);
     const session = await sessionService.createSession(validatedData, user);
 
@@ -36,12 +49,8 @@ export async function create(req: Request, res: Response, next: NextFunction): P
  */
 export async function getById(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const id = String(req.params.id || '');
-    if (!id) {
-      throw new AppError('Session ID is required', 400);
-    }
-
-    const session = await sessionService.getSessionById(id);
+    const user = requireUser(req);
+    const session = await sessionService.getSessionForUser(requireSessionId(req), user);
 
     res.status(200).json({
       success: true,
@@ -59,10 +68,9 @@ export async function getById(req: Request, res: Response, next: NextFunction): 
  */
 export async function updateStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const id = String(req.params.id || '');
-    if (!id) {
-      throw new AppError('Session ID is required', 400);
-    }
+    const user = requireUser(req);
+    const id = requireSessionId(req);
+    await sessionService.getSessionForUser(id, user);
 
     const { status } = updateSessionStatusSchema.parse(req.body);
     const updatedSession = await sessionService.updateSessionStatus(id, status);
@@ -84,18 +92,12 @@ export async function updateStatus(req: Request, res: Response, next: NextFuncti
  */
 export async function executeCodeInSession(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const id = String(req.params.id || '');
-    if (!id) {
-      throw new AppError('Session ID is required', 400);
-    }
-
-    // Verify session exists
-    await sessionService.getSessionById(id);
+    const user = requireUser(req);
+    const id = requireSessionId(req);
+    await sessionService.getSessionForUser(id, user);
 
     const validatedInput = executeCodeSchema.parse(req.body);
-
-    // Run in isolated sandbox
-    const result = await codeRunnerService.executeCode(validatedInput);
+    const result = await codeRunnerService.executeCodeForUser(user.userId, validatedInput);
 
     // Auto-update latest code in session
     await sessionService.updateSessionCode(id, validatedInput.code);

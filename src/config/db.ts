@@ -1,39 +1,29 @@
-/* eslint-disable @typescript-eslint/no-var-requires */
-let PrismaClientClass: any;
+import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { env } from './env';
 
-try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  PrismaClientClass = require('@prisma/client').PrismaClient;
-} catch {
-  PrismaClientClass = class MockPrismaClient {
-    user = {
-      findUnique: async () => null,
-      create: async (args: any) => ({ id: 'mock-user-id', ...args.data, createdAt: new Date(), updatedAt: new Date() }),
-    };
-    interviewSession = {
-      findUnique: async () => null,
-      create: async (args: any) => ({ id: 'mock-session-id', ...args.data, createdAt: new Date(), updatedAt: new Date() }),
-      update: async (args: any) => ({ id: args.where.id, ...args.data, updatedAt: new Date() }),
-    };
-  };
-}
-
-let prisma: any;
-
-try {
-  if (process.env.NODE_ENV === 'production') {
-    prisma = new PrismaClientClass();
-  } else {
-    if (!(global as any).__prisma) {
-      (global as any).__prisma = new PrismaClientClass({
-        log: ['error', 'warn'],
-      });
-    }
-    prisma = (global as any).__prisma;
+/**
+ * Prisma client, or null when DATABASE_URL is not configured.
+ *
+ * Without a database the services use an in-memory store (development/test only —
+ * env.ts refuses to start in production without DATABASE_URL). When a database IS
+ * configured, errors propagate instead of silently falling back to memory.
+ */
+function createClient(): PrismaClient | null {
+  if (!env.DATABASE_URL) {
+    console.warn('⚠️  DATABASE_URL not set — using IN-MEMORY storage. All data is lost on restart.');
+    return null;
   }
-} catch {
-  prisma = new PrismaClientClass();
+
+  const globalForPrisma = globalThis as unknown as { __prisma?: PrismaClient };
+  if (!globalForPrisma.__prisma) {
+    globalForPrisma.__prisma = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: env.DATABASE_URL }),
+      log: env.NODE_ENV === 'production' ? ['error'] : ['error', 'warn'],
+    });
+  }
+  return globalForPrisma.__prisma;
 }
 
-export { prisma };
+export const prisma = createClient();
 export default prisma;

@@ -141,6 +141,59 @@ async function runSocketVerification() {
     assert(getSessionRes.status === 200, 'Fetch Session Details via GET /api/sessions/:id');
 
     // -------------------------------------------------------------------------
+    // Step 3b: Security — self-assigned ADMIN and non-participant access are rejected
+    // -------------------------------------------------------------------------
+    console.log(`\n${YELLOW}Step 3b: Verifying access control...${RESET}`);
+    const regAdmin = await fetchJson('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        fullName: 'Wannabe Admin',
+        email: `wannabe_admin_${TIMESTAMP}@example.com`,
+        password: 'Password123!',
+        role: 'ADMIN',
+      }),
+    });
+    assert(regAdmin.status === 400, 'Reject Self-Registration as ADMIN', `HTTP ${regAdmin.status}`);
+
+    const regOutsider = await fetchJson('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        fullName: 'Other Candidate',
+        email: `outsider_${TIMESTAMP}@example.com`,
+        password: 'Password123!',
+        role: 'CANDIDATE',
+      }),
+    });
+    const outsiderToken = regOutsider.body?.token;
+    assert(!!outsiderToken, 'Register Outsider Candidate');
+
+    const outsiderGet = await fetchJson(`/api/sessions/${sessionId}`, {
+      headers: { Authorization: `Bearer ${outsiderToken}` },
+    });
+    assert(outsiderGet.status === 404, "Outsider Cannot Read Another Candidate's Session", `HTTP ${outsiderGet.status}`);
+
+    const outsiderPatch = await fetchJson(`/api/sessions/${sessionId}/status`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${outsiderToken}` },
+      body: JSON.stringify({ status: 'COMPLETED' }),
+    });
+    assert(outsiderPatch.status === 404, "Outsider Cannot Change Another Candidate's Session Status", `HTTP ${outsiderPatch.status}`);
+
+    const outsiderSocket: Socket = io(BASE_URL, {
+      auth: { token: outsiderToken },
+      transports: ['websocket'],
+      reconnection: false,
+    });
+    await new Promise<void>((resolve) => outsiderSocket.on('connect', () => resolve()));
+    const outsiderJoin = await new Promise<any>((resolve) => outsiderSocket.emit('room:join', { sessionId }, resolve));
+    assert(outsiderJoin?.success === false, "Outsider Cannot Join Another Candidate's Room");
+    const outsiderChat = await new Promise<any>((resolve) =>
+      outsiderSocket.emit('chat:message', { sessionId, message: 'sneaky' }, resolve)
+    );
+    assert(outsiderChat?.success === false, 'Outsider Cannot Send Chat to a Room Without Joining');
+    outsiderSocket.disconnect();
+
+    // -------------------------------------------------------------------------
     // Step 4: Connect Candidate and Recruiter Socket.IO Clients
     // -------------------------------------------------------------------------
     console.log(`\n${YELLOW}Step 4: Connecting Candidate & Recruiter Socket Clients...${RESET}`);

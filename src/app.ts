@@ -1,7 +1,7 @@
 import express, { Application, Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { env } from './config/env';
+import { corsOrigin } from './config/env';
 import { errorHandler } from './middlewares/errorHandler';
 import authRoutes from './routes/auth.routes';
 import testRoutes from './routes/test.routes';
@@ -10,8 +10,9 @@ import sessionRoutes from './routes/session.routes';
 const app: Application = express();
 
 app.use(helmet());
-app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
-app.use(express.json());
+// Auth uses Bearer tokens (not cookies), so credentialed CORS is not needed
+app.use(cors({ origin: corsOrigin }));
+app.use(express.json({ limit: '256kb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Health Check

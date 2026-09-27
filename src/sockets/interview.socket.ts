@@ -6,6 +6,8 @@ import { JwtUserPayload, UserRole } from '../types/auth.types';
 import { normalizeRole } from '../middlewares/auth.middleware';
 import * as sessionService from '../services/session.service';
 import * as codeRunnerService from '../services/codeRunner.service';
+import { executeCodeSchema } from '../validators/codeRunner.validator';
+import { AppError } from '../middlewares/errorHandler';
 import {
   ChatMessagePayload,
   CodeChangePayload,
@@ -16,6 +18,10 @@ import {
 // Map to manage debounced database persistence for active coding sessions
 const codeDebounceTimers = new Map<string, NodeJS.Timeout>();
 const CODE_SAVE_DEBOUNCE_MS = 500;
+const MAX_CODE_LENGTH = 100_000;
+const MAX_CHAT_LENGTH = 5_000;
+
+const roomFor = (sessionId: string) => `interview:${sessionId}`;
 
 export interface CodeRunPayload {
   sessionId: string;
@@ -74,27 +80,43 @@ export function initInterviewSocket(io: SocketIOServer): void {
     console.log(`[Socket] User connected: ${user?.email} (${user?.role}) [SocketID: ${socket.id}]`);
 
     /**
+     * Room events are only accepted from sockets that passed the room:join access check
+     */
+    const requireJoined = (sessionId: unknown, callback?: (res: any) => void): sessionId is string => {
+      if (typeof sessionId === 'string' && socket.rooms.has(roomFor(sessionId))) {
+        return true;
+      }
+      const message = 'Join the session room (room:join) before sending events to it';
+      if (callback) callback({ success: false, message });
+      socket.emit('error', { message });
+      return false;
+    };
+
+    /**
      * room:join
      * Candidate or Recruiter joins interview session room
      */
     socket.on('room:join', async (payload: RoomJoinPayload, callback?: (res: any) => void) => {
       try {
         const { sessionId } = payload || {};
-        if (!sessionId) {
+        if (!sessionId || typeof sessionId !== 'string') {
           if (callback) callback({ success: false, message: 'sessionId is required' });
           return;
         }
 
-        const roomName = `interview:${sessionId}`;
-        socket.join(roomName);
-
-        // Fetch current session state
+        // Only participants (or admins) may join; throws 404 otherwise
         let session;
         try {
-          session = await sessionService.getSessionById(sessionId);
-        } catch {
-          session = null;
+          session = await sessionService.getSessionForUser(sessionId, user);
+        } catch (err: any) {
+          const message = err instanceof AppError ? err.message : 'Failed to join room';
+          if (callback) callback({ success: false, message });
+          socket.emit('error', { message });
+          return;
         }
+
+        const roomName = roomFor(sessionId);
+        socket.join(roomName);
 
         const joinResponse = {
           success: true,
@@ -105,8 +127,8 @@ export function initInterviewSocket(io: SocketIOServer): void {
             email: user.email,
             role: user.role,
           },
-          currentCode: session?.codeState || '',
-          status: session?.status || 'ACTIVE',
+          currentCode: session.codeState,
+          status: session.status,
         };
 
         // Acknowledge join to the connecting client
@@ -138,11 +160,12 @@ export function initInterviewSocket(io: SocketIOServer): void {
     socket.on('code:change', async (payload: CodeChangePayload) => {
       try {
         const { sessionId, code, cursorPosition } = payload || {};
-        if (!sessionId || typeof code !== 'string') {
+        if (!sessionId || typeof code !== 'string' || code.length > MAX_CODE_LENGTH) {
           return;
         }
+        if (!requireJoined(sessionId)) return;
 
-        const roomName = `interview:${sessionId}`;
+        const roomName = roomFor(sessionId);
 
         // 1. Broadcast live code updates to all observers/participants in the room
         const updatePayload = {
@@ -192,18 +215,28 @@ export function initInterviewSocket(io: SocketIOServer): void {
      */
     socket.on('code:run', async (payload: CodeRunPayload, callback?: (res: any) => void) => {
       try {
-        const { sessionId, language, code, testCases, timeoutMs } = payload || {};
-        if (!sessionId || !code) {
-          if (callback) callback({ success: false, message: 'sessionId and code are required' });
+        const { sessionId, ...runInput } = payload || ({} as CodeRunPayload);
+        if (!sessionId) {
+          if (callback) callback({ success: false, message: 'sessionId is required' });
           return;
         }
+        if (!requireJoined(sessionId, callback)) return;
 
-        const roomName = `interview:${sessionId}`;
+        // Same validation as the REST endpoint (language, code size, timeout bounds)
+        const parsed = executeCodeSchema.safeParse({ ...runInput, language: runInput.language || 'javascript' });
+        if (!parsed.success) {
+          const message = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+          if (callback) callback({ success: false, message });
+          return;
+        }
+        const input = parsed.data;
+
+        const roomName = roomFor(sessionId);
 
         // Notify room that execution has started
         io.to(roomName).emit('code:executing', {
           sessionId,
-          language: language || 'javascript',
+          language: input.language,
           sender: {
             userId: user.userId,
             email: user.email,
@@ -213,15 +246,12 @@ export function initInterviewSocket(io: SocketIOServer): void {
         });
 
         // Run code in isolated sandbox
-        const result = await codeRunnerService.executeCode({
-          language: language || 'javascript',
-          code,
-          testCases,
-          timeoutMs: timeoutMs || 5000,
-        });
+        const result = await codeRunnerService.executeCodeForUser(user.userId, input);
 
         // Update session code in background
-        sessionService.updateSessionCode(sessionId, code).catch(() => {});
+        sessionService.updateSessionCode(sessionId, input.code).catch((saveErr) => {
+          console.error(`[Socket] Failed to save code for ${sessionId}:`, saveErr);
+        });
 
         const responsePayload = {
           sessionId,
@@ -241,8 +271,10 @@ export function initInterviewSocket(io: SocketIOServer): void {
         if (callback) callback({ success: true, data: result });
         console.log(`[Socket] Executed code for ${sessionId} [Status: ${result.status}, Time: ${result.executionTimeMs}ms]`);
       } catch (err: any) {
-        console.error('[Socket] code:run error:', err);
-        socket.emit('error', { message: err?.message || 'Failed to execute code' });
+        const message = err instanceof AppError ? err.message : 'Failed to execute code';
+        if (!(err instanceof AppError)) console.error('[Socket] code:run error:', err);
+        if (callback) callback({ success: false, message });
+        socket.emit('error', { message });
       }
     });
 
@@ -253,12 +285,17 @@ export function initInterviewSocket(io: SocketIOServer): void {
     socket.on('chat:message', async (payload: ChatMessagePayload, callback?: (res: any) => void) => {
       try {
         const { sessionId, message } = payload || {};
-        if (!sessionId || !message) {
+        if (!sessionId || !message || typeof message !== 'string') {
           if (callback) callback({ success: false, message: 'sessionId and message are required' });
           return;
         }
+        if (message.length > MAX_CHAT_LENGTH) {
+          if (callback) callback({ success: false, message: `message cannot exceed ${MAX_CHAT_LENGTH} characters` });
+          return;
+        }
+        if (!requireJoined(sessionId, callback)) return;
 
-        const roomName = `interview:${sessionId}`;
+        const roomName = roomFor(sessionId);
         const chatData = {
           id: randomUUID(),
           sessionId,
@@ -300,8 +337,13 @@ export function initInterviewSocket(io: SocketIOServer): void {
           if (callback) callback({ success: false, message: 'Forbidden: Insufficient role' });
           return;
         }
+        if (typeof content !== 'string' || content.length > MAX_CHAT_LENGTH) {
+          if (callback) callback({ success: false, message: `content must be a string up to ${MAX_CHAT_LENGTH} characters` });
+          return;
+        }
+        if (!requireJoined(sessionId, callback)) return;
 
-        const roomName = `interview:${sessionId}`;
+        const roomName = roomFor(sessionId);
         const interventionData = {
           id: randomUUID(),
           sessionId,

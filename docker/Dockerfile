@@ -3,7 +3,8 @@
 # Lightweight, secure runtime for untrusted candidate code execution
 # ==============================================================================
 
-FROM node:20-alpine
+# Node 22 is needed to run TypeScript via --experimental-strip-types
+FROM node:22-alpine
 
 # Install Python 3 and runtime essentials
 RUN apk add --no-cache \

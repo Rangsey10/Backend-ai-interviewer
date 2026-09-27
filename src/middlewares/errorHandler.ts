@@ -44,7 +44,15 @@ export const errorHandler = (
   }
 
   const statusCode = err instanceof AppError ? err.statusCode : err.status || 500;
-  const message = err.message || 'Internal Server Error';
+
+  // Unexpected errors (DB, bugs) may carry internal details — log them, don't expose in production
+  if (!(err instanceof AppError) && statusCode >= 500) {
+    console.error('[Error]', err);
+  }
+  const message =
+    statusCode >= 500 && !(err instanceof AppError) && process.env.NODE_ENV === 'production'
+      ? 'Internal Server Error'
+      : err.message || 'Internal Server Error';
 
   res.status(statusCode).json({
     success: false,
