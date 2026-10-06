@@ -13,6 +13,18 @@ const envSchema = z
     // Comma-separated list of allowed origins, or "*"
     CORS_ORIGIN: z.string().default('*'),
     DATABASE_URL: z.string().optional(),
+    // AI service (ai-service/): question generation, answer feedback, code evaluation, final report
+    AI_SERVICE_URL: z.string().default('http://localhost:3000'),
+    // The AI service queues calls (>= 8s apart) and evaluates code in Docker, so allow a long timeout
+    AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300000).default(120000),
+    // Extra attempts for network errors / 502-504 only (the AI service already retries model calls itself)
+    AI_MAX_RETRIES: z.coerce.number().int().min(0).max(3).default(1),
+    // Max AI requests per user per minute (protects the shared Groq rate limit)
+    AI_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(30),
+    // In-memory mode only (no DATABASE_URL): create this admin at startup so the admin workspace can be demoed.
+    // With a database use `npm run create-admin` instead.
+    DEV_ADMIN_EMAIL: z.string().email().optional(),
+    DEV_ADMIN_PASSWORD: z.string().min(8).optional(),
     // Allows running candidate code directly on the host when Docker is unavailable (never in production)
     ALLOW_UNSANDBOXED_RUNNER: z
       .enum(['true', 'false'])

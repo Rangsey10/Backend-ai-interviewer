@@ -13,7 +13,9 @@ export async function register(req: Request, res: Response, next: NextFunction):
 
     res.status(201).json({
       success: true,
-      message: 'User registered successfully',
+      message: result.pendingApproval
+        ? 'Registration received. An administrator must approve your recruiter account before you can sign in.'
+        : 'User registered successfully',
       user: result.user,
       token: result.token,
       data: result,

@@ -1,15 +1,9 @@
 import { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 
-export class AppError extends Error {
-  public statusCode: number;
-
-  constructor(message: string, statusCode: number = 500) {
-    super(message);
-    this.statusCode = statusCode;
-    Error.captureStackTrace(this, this.constructor);
-  }
-}
+// AppError lives in its own dependency-free module; re-exported so existing imports keep working
+import { AppError } from '../lib/appError';
+export { AppError };
 
 export const errorHandler = (
   err: any,
@@ -28,6 +22,7 @@ export const errorHandler = (
       success: false,
       status: 400,
       message: 'Validation failed',
+      error: `Validation failed: ${formattedErrors.map((e) => `${e.field} ${e.message}`).join('; ')}`,
       errors: formattedErrors,
     });
     return;
@@ -39,6 +34,7 @@ export const errorHandler = (
       success: false,
       status: 409,
       message: 'A record with this information already exists',
+      error: 'A record with this information already exists',
     });
     return;
   }
@@ -58,6 +54,7 @@ export const errorHandler = (
     success: false,
     status: statusCode,
     message,
+    error: message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 };

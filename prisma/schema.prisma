@@ -19,18 +19,28 @@ enum SessionStatus {
   COMPLETED
 }
 
+// Recruiter accounts start as PENDING_APPROVAL until an admin approves them
+enum UserStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  REJECTED
+  SUSPENDED
+}
+
 model User {
   id           String   @id @default(uuid())
   fullName     String
   email        String   @unique
   passwordHash String
   role         Role     @default(CANDIDATE)
+  status       UserStatus @default(ACTIVE)
   resumeUrl    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   candidateSessions InterviewSession[] @relation("CandidateSessions")
   recruiterSessions InterviewSession[] @relation("RecruiterSessions")
+  notifications     Notification[]
 
   @@map("users")
 }
@@ -60,13 +70,18 @@ model InterviewSession {
 model Question {
   id        String  @id @default(uuid())
   sessionId String
-  text      String
-  type      String? // e.g. "technical", "behavioral", "coding"
-  order     Int
+  text       String
+  type       String? // "theoretical" | "coding" | "design" (as produced by the AI service)
+  topic      String?
+  difficulty String?
+  order      Int
+  // Everything else the AI/recruiter attached: skills, estimated_time, based_on, testCases, ...
+  meta       Json?
 
   session InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   answer  Answer?
 
+  @@index([sessionId, order])
   @@map("questions")
 }
 
@@ -76,6 +91,13 @@ model Answer {
   answerText    String?
   submittedCode String?
   language      String?
+  // AI evaluation output, stored exactly as the AI service returned it
+  feedback       Json? // AI-006 answer feedback (score 0-10)
+  codeEvaluation Json? // AI-005 code evaluation (score 0-100)
+  followUp       Json? // AI-004 follow-up decision
+  // Normalised 0-100 score used for analytics (null until evaluated)
+  score          Float?
+  createdAt      DateTime @default(now())
 
   question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
@@ -85,11 +107,46 @@ model Answer {
 model Result {
   id        String   @id @default(uuid())
   sessionId String
-  score     Float
-  feedback  String
-  createdAt DateTime @default(now())
+  score          Float
+  feedback       String
+  recommendation String?
+  // Full AI-007 final report
+  report         Json?
+  createdAt      DateTime @default(now())
 
   session InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
+  @@index([sessionId])
   @@map("results")
+}
+
+// In-app notifications: interview scheduled/completed, feedback ready, announcements
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  data      Json?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read, createdAt])
+  @@map("notifications")
+}
+
+// One row per call to the AI service, used for AI reliability/integrity monitoring
+model AiCallLog {
+  id        String   @id @default(uuid())
+  feature   String
+  ok        Boolean
+  latencyMs Int
+  attempts  Int      @default(1)
+  error     String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("ai_call_logs")
 }

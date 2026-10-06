@@ -4,7 +4,8 @@ import { executeCodeSchema } from '../validators/codeRunner.validator';
 import * as sessionService from '../services/session.service';
 import * as codeRunnerService from '../services/codeRunner.service';
 import { AppError } from '../middlewares/errorHandler';
-import { JwtUserPayload } from '../types/auth.types';
+import { JwtUserPayload, UserRole } from '../types/auth.types';
+import { findAccountByEmail } from '../services/auth.service';
 
 function requireUser(req: Request): JwtUserPayload {
   const user = req.user;
@@ -30,6 +31,13 @@ export async function create(req: Request, res: Response, next: NextFunction): P
   try {
     const user = requireUser(req);
     const validatedData = createSessionSchema.parse(req.body);
+    if (validatedData.candidateEmail && user.role !== UserRole.CANDIDATE) {
+      const account = await findAccountByEmail(validatedData.candidateEmail);
+      if (!account || account.role !== UserRole.CANDIDATE) {
+        throw new AppError('No candidate account was found with that email', 404);
+      }
+      validatedData.candidateId = account.id;
+    }
     const session = await sessionService.createSession(validatedData, user);
 
     res.status(201).json({

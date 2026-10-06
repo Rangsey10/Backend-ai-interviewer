@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 import { JwtUserPayload, UserRole } from '../types/auth.types';
+import { getUserStatus } from '../services/auth.service';
 
 /**
  * Normalizes a role string to matching UserRole enum value or undefined
@@ -75,6 +76,18 @@ export const requireAuth = async (
         success: false,
         status: 403,
         message: 'User role is invalid or not recognized.',
+      });
+      return;
+    }
+
+    // A token stays cryptographically valid after an account is suspended/deleted — check live status
+    const status = await getUserStatus(decoded.userId);
+    if (status === null || status !== 'ACTIVE') {
+      res.status(403).json({
+        success: false,
+        status: 403,
+        message: status === null ? 'Account no longer exists.' : 'Your account is not active.',
+        error: status === null ? 'Account no longer exists.' : 'Your account is not active.',
       });
       return;
     }

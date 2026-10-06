@@ -2,6 +2,8 @@ import { Router, Request, Response } from 'express';
 import * as authController from '../controllers/auth.controller';
 import { requireAuth, requireRole } from '../middlewares/auth.middleware';
 import { UserRole } from '../types/auth.types';
+import { handle } from '../lib/handler';
+import * as platform from '../controllers/platform.controller';
 
 const router = Router();
 
@@ -11,6 +13,8 @@ router.post('/login', authController.login);
 
 // Authenticated User Profile
 router.get('/me', requireAuth, authController.getMe);
+router.patch('/me', requireAuth, handle(platform.updateMyProfile));
+router.post('/change-password', requireAuth, handle(platform.changeMyPassword));
 
 // RBAC Demo / Role-guarded Endpoints
 router.get('/candidate-only', requireAuth, requireRole([UserRole.CANDIDATE]), (req: Request, res: Response) => {

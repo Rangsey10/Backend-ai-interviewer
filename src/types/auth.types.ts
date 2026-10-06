@@ -19,6 +19,7 @@ export interface SanitizedUser {
   fullName: string;
   email: string;
   role: UserRole;
+  status?: 'PENDING_APPROVAL' | 'ACTIVE' | 'REJECTED' | 'SUSPENDED';
   resumeUrl?: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -26,5 +27,7 @@ export interface SanitizedUser {
 
 export interface AuthResponse {
   user: SanitizedUser;
-  token: string;
+  /** null while a recruiter account awaits admin approval */
+  token: string | null;
+  pendingApproval?: boolean;
 }

@@ -8,6 +8,8 @@ export const createSessionSchema = z.object({
     .max(200, 'jobTitle cannot exceed 200 characters')
     .trim(),
   candidateId: z.string().optional(),
+  // Recruiters can assign by the candidate's account email instead of an id
+  candidateEmail: z.string().email().toLowerCase().trim().optional(),
   recruiterId: z.string().optional(),
   jobDescription: z.string().optional().nullable(),
   resumeText: z.string().optional().nullable(),

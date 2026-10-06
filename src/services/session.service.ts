@@ -3,6 +3,7 @@ import { prisma } from '../config/db';
 import { JwtUserPayload, UserRole } from '../types/auth.types';
 import { CreateSessionDTO, InterviewSessionData, SessionStatus } from '../types/session.types';
 import { AppError } from '../middlewares/errorHandler';
+import { lookupUsers } from './auth.service';
 
 const DEFAULT_INITIAL_CODE = `// Welcome to the Live Interview Session
 // Language: JavaScript / TypeScript
@@ -118,7 +119,7 @@ export async function getSessionById(sessionId: string): Promise<InterviewSessio
     if (row) return toSessionData(row);
   } else {
     const cached = inMemorySessions.get(sessionId);
-    if (cached) return cached;
+    if (cached) return (await withParticipants([cached]))[0];
   }
 
   throw new AppError(`Interview session with ID '${sessionId}' not found`, 404);
@@ -152,10 +153,11 @@ export async function updateSessionStatus(
     return toSessionData(row);
   }
 
-  const session = await getSessionById(sessionId);
-  session.status = status;
-  session.updatedAt = new Date();
-  return session;
+  const stored = inMemorySessions.get(sessionId);
+  if (!stored) throw new AppError(`Interview session with ID '${sessionId}' not found`, 404);
+  stored.status = status;
+  stored.updatedAt = new Date();
+  return (await withParticipants([stored]))[0];
 }
 
 /**
@@ -181,4 +183,42 @@ export async function updateSessionCode(sessionId: string, code: string): Promis
     cached.codeState = code;
     cached.updatedAt = new Date();
   }
+}
+
+
+/** In-memory mode only: attach candidate/recruiter names (the DB path does this with `include`) */
+async function withParticipants(sessions: InterviewSessionData[]): Promise<InterviewSessionData[]> {
+  const people = await lookupUsers(sessions.flatMap((s) => [s.candidateId, s.recruiterId ?? '']));
+  return sessions.map((s) => ({
+    ...s,
+    candidate: people.get(s.candidateId),
+    recruiter: s.recruiterId ? people.get(s.recruiterId) ?? null : null,
+  }));
+}
+
+/**
+ * All sessions the user may see, newest first.
+ * Same visibility rules as canAccessSession (admin: all; candidate: own; recruiter: assigned or unassigned).
+ */
+export async function listSessionsForUser(user: JwtUserPayload): Promise<InterviewSessionData[]> {
+  if (prisma) {
+    const where =
+      user.role === UserRole.ADMIN
+        ? {}
+        : user.role === UserRole.CANDIDATE
+          ? { candidateId: user.userId }
+          : { OR: [{ recruiterId: null }, { recruiterId: user.userId }] };
+    const rows = await prisma.interviewSession.findMany({
+      where,
+      include: { candidate: PARTICIPANT_SELECT, recruiter: PARTICIPANT_SELECT },
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    return rows.map(toSessionData);
+  }
+
+  const visible = [...inMemorySessions.values()]
+    .filter((s) => canAccessSession(s, user))
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  return withParticipants(visible);
 }

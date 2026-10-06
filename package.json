@@ -13,7 +13,8 @@
     "create-admin": "ts-node scripts/create-admin.ts",
     "test:socket": "ts-node test_socket_session.ts",
     "test:runner": "ts-node test_code_runner.ts",
-    "test": "npm run test:socket && npm run test:runner"
+    "test": "npm run test:socket && npm run test:runner",
+    "test:unit": "npx --yes tsx --test tests/*.test.ts"
   },
   "keywords": [],
   "author": "",
